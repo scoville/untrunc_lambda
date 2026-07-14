@@ -4,6 +4,7 @@
 untrunc
 untrunc-*
 ffmpeg-*
+!ffmpeg-mathops.patch
 libav-*
 build
 *.pro.user
