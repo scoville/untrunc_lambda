@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <memory>
 
+#include "common.h"
 #include "track.h"
 #include "atom.h"
 class FileRead;
@@ -89,6 +90,7 @@ public:
 	void dumpSamples();
 	void analyze(bool gen_off_map=false);
 	void repair(const std::string& filename);
+	void repairRsvBen(const std::string& filename);
 
 	bool wouldMatch(const WouldMatchCfg& cfg);
 	bool wouldMatch2(const uchar* start);
@@ -143,7 +145,7 @@ public:
 
 	// Note: An backtrack algo across multiple (e.g. track_order.size()) matches would be better than this, since it would work even if currentChunkFinished + we wouldn't have to check upfront
 	int findSizeWithContinuation(off_t off, std::vector<int> sizes) {
-		if (!track_order_.size() || currentChunkFinished(1)) {
+		if (!track_order_.size() || amInFreeSequence() || currentChunkFinished(1)) {
 			return sizes.back();
 		}
 		auto& t = tracks_[last_track_idx_];
@@ -295,7 +297,7 @@ private:
 	bool currentChunkFinished(int add_extra=0) {
 		if (next_chunk_idx_ == 0) return true;
 		auto [cur_track_idx, expected_ns] = track_order_[(next_chunk_idx_-1) % track_order_.size()];
-		assert(cur_track_idx == last_track_idx_);
+		assert(cur_track_idx == last_track_idx_, cur_track_idx, getCodecName(cur_track_idx), last_track_idx_, getCodecName(last_track_idx_));
 		auto& t = tracks_[cur_track_idx];
 		if (t.current_chunk_.n_samples_ + add_extra < expected_ns) {
 			dbgg("current_chunk not finished", next_chunk_idx_, t.codec_.name_, t.current_chunk_.n_samples_, expected_ns);
@@ -361,6 +363,7 @@ private:
 	bool trust_simple_track_order_ = false;
 	int cycle_size_ = 0;  // (average) size of single track_order_ repetition
 	uint64_t next_chunk_idx_ = 0;  // does not count the 'free' track
+	bool ignored_chunk_order_ = false;
 	int getLikelyNextTrackIdx(int* n_samples=nullptr);
 	bool isTrackOrderEnough();
 	void genTrackOrder();
@@ -374,6 +377,12 @@ private:
 	void pushBackLastChunk();
 
 	void onNewChunkStarted(int new_track_idx) {
+		if (ignored_chunk_order_) {
+			dbgg("Ignored chunk order previously, calling correctChunkIdx", new_track_idx, getCodecName(new_track_idx));
+			correctChunkIdx(new_track_idx);
+			ignored_chunk_order_ = false;
+		}
+
 		pushBackLastChunk();
 		done_padding_after_ = false;
 		if (new_track_idx != idx_free_) {

@@ -33,6 +33,7 @@ extern "C" {
 #include "mp4.h"
 #include "atom.h"
 #include "file.h"
+#include "rsv.h"
 
 using namespace std;
 
@@ -153,6 +154,7 @@ void Mp4::parseOk(const string& filename, bool accept_unhealthy) {
 		logg(V, "detected 'XAVC', deactivating 'g_strict_nal_frame_check'\n");
 		g_strict_nal_frame_check = false;
 		g_ignore_forbidden_nal_bit = false;
+		g_allow_large_sample = true;
 	}
 
 	has_moov_ = root_atom_->atomByName("moov", true);
@@ -449,7 +451,7 @@ void Mp4::saveVideo(const string& filename) {
 		cout << "Info: Found " << pkt_idx_ << " packets ( ";
 		for(const Track& t : tracks_){
 			cout << t.codec_.name_ << ": " << t.getNumSamples() << ' ';
-			if (contains({"avc1", "hvc1"}, t.codec_.name_))
+			if (contains({"avc1", "hvc1", "hev1"}, t.codec_.name_) || t.keyframes_.size())
 				cout << ss(t.codec_.name_, "-keyframes: ", t.keyframes_.size(), " ");
 		}
 		cout << ")\n";
@@ -570,6 +572,7 @@ string Mp4::getOutputSuffix() {
 	if (g_use_chunk_stats) output_suffix += "-dyn";
 	if (g_dont_exclude) output_suffix += "-k";
 	if (g_stretch_video) output_suffix += "-sv";
+	if (g_rsv_ben_mode) output_suffix += "-rsvBen";
 	return output_suffix;
 }
 
@@ -1085,7 +1088,7 @@ void Mp4::correctChunkIdxSimple(int track_idx) {
 
 	int off_ok = -1;
 	for (uint off=0; off < order_sz; off++) {
-		if (track_order_simple_[next_chunk_idx_+off % order_sz] == track_idx) {
+		if (track_order_simple_[(next_chunk_idx_+off) % order_sz] == track_idx) {
 			if (off_ok < 0) off_ok = off;
 			else {logg(W, "correctChunkIdxSimple(", track_idx, "): next chunk is ambiguous\n"); break;};
 		}
@@ -1253,19 +1256,26 @@ BufferedAtom* Mp4::findMdat(FileRead& file_read) {
 		return mdatFromRange(file_read, mdat);
 
 	if (!isPointingAtAtom(file_read)) {
-		logg(W, "no mp4-structure found in: '", file_read.filename_, "'\n");
-		auto moov = root_atom_->atomByNameSafe("moov");
-//		if (ftyp_ == "XAVC") {
-		if (orig_mdat_start_ < moov->start_) {
-			logg(I, "using orig_mdat_start_ (=", orig_mdat_start_, ")\n");
-			mdat.start_ = orig_mdat_start_;
-			mdat.name_ = "mdat";
-		}
-		else if (!g_search_mdat) {
-			logg(I, "assuming start_offset=0. \n",
-			     "      use '-sm' to search for 'mdat' atom instead (via brute-force)\n");
+		if (isPointingAtRtmdHeader(file_read)) {
+			logg(I, "found rtmd-header at start of file, probably a .RSV file. Try '-rsv-ben' too\n");
 			mdat.start_ = -8;
 			mdat.name_ = "mdat";
+		}
+		else {
+			logg(W, "no mp4-structure found in: '", file_read.filename_, "'\n");
+			auto moov = root_atom_->atomByNameSafe("moov");
+	//		if (ftyp_ == "XAVC") {
+			if (orig_mdat_start_ < moov->start_) {
+				logg(I, "using orig_mdat_start_ (=", orig_mdat_start_, ")\n");
+				mdat.start_ = orig_mdat_start_;
+				mdat.name_ = "mdat";
+			}
+			else if (!g_search_mdat) {
+				logg(I, "assuming start_offset=0. \n",
+					"      use '-sm' to search for 'mdat' atom instead (via brute-force)\n");
+				mdat.start_ = -8;
+				mdat.name_ = "mdat";
+			}
 		}
 	}
 
@@ -1660,7 +1670,7 @@ bool Mp4::chunkStartLooksInvalid(off_t offset, const Mp4::Chunk& c) {
 	}
 	else {
 		dbgg("getNextTrackViaDynPatterns does not agree", offset, c, t.predictable_start_cnt_);
-		if (t.predictable_start_cnt_ > 5) {
+		if (t.predictable_start_cnt_ > 5 && nearEnd(offset)) {
 			return true;
 		}
 		else {
@@ -1682,6 +1692,7 @@ Mp4::Chunk Mp4::getChunkPrediction(off_t offset, bool only_perfect_fit) {
 	if (predictChunkViaOrder(offset, c)) {
 		if (c && chunkStartLooksInvalid(offset, c)) {
 			dbgg("Ignoring predictChunkViaOrder, chunkStartLooksInvalid fails", c);
+			ignored_chunk_order_ = true;
 			return Mp4::Chunk();
 		}
 		return c;
@@ -2023,6 +2034,10 @@ bool Mp4::chkOffset(off_t& offset) {
 		chkExcludeOverlap(orig_off, skipped);
 		addToExclude(orig_off, skipped);
 	}
+	if (!r) {  // at end
+		pushBackLastChunk();
+		chkUnknownSequenceEnded(offset);
+	}
 	return r;
 }
 
@@ -2231,6 +2246,16 @@ bool Mp4::setDuplicateInfo() {
 
 void Mp4::repair(const string& filename) {
 	if (chkBadFFmpegVersion()) {
+		return;
+	}
+
+	// Check for RSV Ben mode
+	if (g_rsv_ben_mode) {
+		FileRead file_read(filename);
+		if (!isPointingAtRtmdHeader(file_read)) {
+			logg(W, "'-rsv-ben' specified but file does not start with rtmd header\n");
+		}
+		repairRsvBen(filename);
 		return;
 	}
 

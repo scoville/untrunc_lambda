@@ -22,6 +22,7 @@ LenResult getLengths(Codec* self, const uchar* start, uint maxlength) {
 	const uchar *pos = start;
 
 //	H265SliceInfo previous_slice;
+	bool seen_slice = false;
 	H265NalInfo previous_nal;
 	self->was_keyframe_ = false;
 
@@ -39,7 +40,7 @@ LenResult getLengths(Codec* self, const uchar* start, uint maxlength) {
 		if (h265IsSlice(nal_info.nal_type_)) {
 			H265SliceInfo slice_info(nal_info);
 			if (previous_nal.is_ok) {
-				if (slice_info.isInNewFrame()) return r;
+				if (seen_slice && slice_info.isInNewFrame()) return r;
 				if (previous_nal.nuh_layer_id_ != nal_info.nuh_layer_id_){
 					logg(W, "Different nuh_layer_id_ idc\n");
 					return r;
@@ -49,6 +50,7 @@ LenResult getLengths(Codec* self, const uchar* start, uint maxlength) {
 					return r;
 				}
 			}
+			seen_slice = true;
 		}
 		else switch(nal_info.nal_type_) {
 		case NAL_AUD: // Access unit delimiter
@@ -72,7 +74,7 @@ LenResult getLengths(Codec* self, const uchar* start, uint maxlength) {
 			break;
 		}
 
-		if (self->ss_stats_->wouldExceed("hvc1", length, nal_info.length_, self->was_keyframe_)) {
+		if (self->ss_stats_->wouldExceed("hvc1", length, nal_info.length_, g_allow_large_sample ? 1 : self->was_keyframe_)) {
 			return r;
 		}
 		if (self->ss_stats_->isBigEnough(length, self->was_keyframe_)) {

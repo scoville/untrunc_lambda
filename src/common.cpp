@@ -5,6 +5,13 @@
 #include <sstream>
 #include <cmath>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#include <codecvt>
+#endif
 
 extern "C" {
 #include "libavcodec/avcodec.h"
@@ -43,6 +50,7 @@ bool g_dont_exclude = false;
 bool g_dump_repaired = false;
 bool g_search_mdat = false;
 bool g_strict_nal_frame_check = true;
+bool g_allow_large_sample = false;
 bool g_ignore_forbidden_nal_bit = false;
 bool g_dont_omit = false;
 bool g_noise_buffer_active = false;
@@ -50,6 +58,7 @@ bool g_ignore_out_of_bound_chunks = false;
 bool g_skip_existing = false;
 bool g_ignore_keyframe_mismatch = false;
 bool g_skip_nal_filler_data = false;
+bool g_rsv_ben_mode = false;
 bool g_off_as_hex = true;
 bool g_fast_assert = false;
 bool g_no_ctts = false;
@@ -320,8 +329,16 @@ int64_t gcd(int64_t a, int64_t b) {
 }
 
 mt19937& getRandomGenerator() {
-	static std::random_device rd;
-	static std::mt19937 gen(rd());
+	static std::mt19937 gen = []() {
+		const char* seed_env = std::getenv("UNTRUNC_SEED");
+		if (seed_env) {
+			auto seed = std::stoul(seed_env);
+			logg(I, "using fixed random seed: ", seed, "\n");
+			return std::mt19937(seed);
+		}
+		std::random_device rd;
+		return std::mt19937(rd());
+	}();
 	return gen;
 }
 
@@ -466,9 +483,6 @@ void parseMaxPartsize(string& s) {
 }
 
 #ifdef _WIN32
-#include <windows.h>
-#include <codecvt>
-
 string to_utf8(const wchar_t* utf16) {
 	wstring_convert<codecvt_utf8_utf16<wchar_t>, wchar_t> convert;
 	return convert.to_bytes(utf16);
@@ -492,20 +506,26 @@ FILE* _my_open(const char* path, const wchar_t* mode) {
 }
 #endif
 
-void callPstack() {
+void showStacktrace() {
 #ifdef _WIN32
     // Do nothing on Windows
 #else
-    // Check if pstack is available
-    if (system("which pstack > /dev/null 2>&1") == 0) {
-        pid_t pid = getpid(); // Get the current process ID
-        string cmd = "pstack " + to_string(pid);
+    // Check if gdb is available
+    if (system("which gdb > /dev/null 2>&1") == 0) {
+        pid_t pid = getpid();
 
+#ifdef __linux__
+        // Allow any process to ptrace us (needed for gdb on modern Linux)
+        prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
+
+		string cmd = "gdb -batch -q -ex 'thread apply all bt' -p " + to_string(pid);
         cerr << "\n+ " << cmd << endl;
+		cmd += " 2>&1 | grep -v -E \"warning: could not find '.*' file for /lib/|warning: .*\\.\\./sysdeps/unix/sysv/linux/.*: No such file or directory\" | cat -s";
         system(cmd.c_str());
-		cerr << "\n";
+        cerr << "\n";
     } else {
-        cerr << "pstack is not available on this system." << endl;
+        cerr << "gdb is not available on this system." << endl;
     }
 #endif
 }

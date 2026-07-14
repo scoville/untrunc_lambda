@@ -29,8 +29,9 @@ extern uint
     g_max_buf_sz_needed,  // for determining part size
     g_max_partsize_default;
 extern bool g_interactive, g_muted, g_ignore_unknown, g_stretch_video,
-    g_show_tracks, g_dont_write, g_use_chunk_stats, g_dont_exclude,
+    g_show_tracks, g_dont_write, g_use_chunk_stats, g_dont_exclude, g_rsv_ben_mode,
     g_dump_repaired, g_search_mdat, g_strict_nal_frame_check,
+    g_allow_large_sample,
     g_ignore_forbidden_nal_bit, g_noise_buffer_active, g_dont_omit,
     g_ignore_keyframe_mismatch,
     g_skip_nal_filler_data,
@@ -245,7 +246,7 @@ FILE* _my_open(const char* path, const wchar_t* mode);
 #define my_open fopen
 #endif
 
-void callPstack();
+void showStacktrace();
 std::vector<std::string> splitAndTrim(const std::string &str);
 
 template <typename... Args>
@@ -293,7 +294,7 @@ void __assertt(const char* expr_str, const char* fn, const char* file, int line,
 
 	if (g_fast_assert) exit(1);
 
-	callPstack();
+	showStacktrace();
 	abort();
 }
 
