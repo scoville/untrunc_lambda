@@ -10,15 +10,11 @@ You need:
 
 ## AWS Lambda Compatible Build
 
-This is a fork specifically configured for AWS Lambda deployment. For building a static binary compatible with AWS Lambda:
+This is a fork specifically configured for AWS Lambda deployment. For building a binary compatible with AWS Lambda:
 
 ```shell
-# Clean any previous builds
-make clean
-rm -rf ffmpeg-*
-
-# Build for Lambda
+# Build for Lambda (requires Docker)
 ./build-lambda.sh
 ```
 
-This creates a statically linked x86_64 binary that works in AWS Lambda environments. The build includes a patch for FFmpeg to fix compilation issues with newer binutils (>= 2.41).
+This creates a stripped x86_64 ELF binary at `lambda-build/untrunc`, built inside the AWS Lambda Python 3.13 runtime image. It is dynamically linked against the Lambda runtime's own glibc/libstdc++/libm/libgcc_s (all resolve to `/lib64/` in the Lambda environment), so it runs as a Lambda layer without bundling any libraries. The build applies `ffmpeg-mathops.patch` (upstream FFmpeg fix `effadce6c75`) so FFmpeg 6.0 compiles with binutils >= 2.41 shipped by the Lambda image.
